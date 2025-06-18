@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Life of a Peasant - Alpha</title>
+    <title>Life of a Peasant - Standalone</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -14,7 +14,7 @@
         }
         canvas {
             background-color: #3a543a; /* A slightly lighter, more detailed green */
-            background-image: 
+            background-image:
                 linear-gradient(rgba(255,255,255,0.02) 2px, transparent 2px),
                 linear-gradient(90deg, rgba(255,255,255,0.02) 2px, transparent 2px);
             background-size: 40px 40px;
@@ -76,14 +76,10 @@
             <div id="inventory-items" class="text-2xl font-bold text-yellow-300 h-full flex items-center justify-center min-w-[50px]"></div>
         </div>
     </div>
-    
+
     <div id="notification" class="notification"></div>
 
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, onSnapshot, setDoc, updateDoc, collection, serverTimestamp, runTransaction, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
         // --- Core Game Setup ---
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
@@ -91,12 +87,13 @@
         canvas.height = window.innerHeight;
 
         let gameState = 'loading';
-        let player = { 
-            id: null, x: canvas.width / 2, y: canvas.height / 2, 
-            speed: 4, money: 0, occupation: "Unemployed", inventory: [], 
-            appearance: 'wisp', isWanted: false, unJailTimestamp: null 
+        let player = {
+            id: 'local-player', x: canvas.width / 2, y: canvas.height / 2,
+            speed: 4, money: 100, occupation: "Unemployed", inventory: [],
+            appearance: 'wisp', isWanted: false, unJailTimestamp: null,
+            characterCreated: false
         };
-        let allPlayers = {}; 
+        let allPlayers = {}; // Will only contain the local player in this version
         let worldState = { jobs: {}, properties: {} };
         const appearanceMap = { 'Man': '👨', 'Woman': '👩', 'wisp': '👻' };
         let playerEmoji = appearanceMap.wisp;
@@ -106,8 +103,8 @@
         // --- Asset Management ---
         const assets = {};
         const assetSources = {
-            bank: './bank.png', // Updated to the local filename you specified
-            policeStation: './policestation.png'
+            bank: 'bank.png',
+            policeStation: 'policestation.png' // <-- CORRECTED LINE
         };
 
         function loadAssets(callback) {
@@ -152,7 +149,11 @@
             house1: { name: "Cozy Cottage", emoji: '🏠', x: 400, y: canvas.height - 200, width: 120, height: 100, color: 'rgba(139, 69, 19, 0.6)', cost: 5000 },
             house2: { name: "Suburban Villa", emoji: '🏡', x: 400, y: canvas.height - 350, width: 150, height: 120, color: 'rgba(165, 42, 42, 0.6)', cost: 12000 }
         };
-        
+
+        // Initialize properties in worldState
+        Object.keys(properties).forEach(id => { worldState.properties[id] = { owner: null }; });
+
+
         const interactionPoints = {
             mayor: { x: zones.cityHall.x + zones.cityHall.width/2, y: zones.cityHall.y + zones.cityHall.height - 20, radius: 15, type: "JOB", jobName: "Mayor" },
             doctor: { x: zones.hospital.x + zones.hospital.width/2, y: zones.hospital.y + zones.hospital.height - 20, radius: 15, type: "JOB", jobName: "Doctor" },
@@ -171,9 +172,7 @@
         const creationChoices = [];
         const keys = { w: false, a: false, s: false, d: false };
         let mousePos = { x: 0, y: 0 };
-        let gameLoopStarted = false;
-        let listenersAttached = false;
-        
+
         // --- Utility Functions ---
         function showNotification(text, type = 'success') {
             const el = document.getElementById('notification');
@@ -188,8 +187,33 @@
             return p.x > zone.x && p.x < zone.x + zone.width && p.y > zone.y && p.y < zone.y + zone.height;
         }
 
+        function updateHUD() {
+            const hud = document.getElementById('hud');
+             if (gameState === 'characterCreation') {
+                hud.classList.add('hidden');
+                return;
+            }
+            hud.classList.remove('hidden');
+
+            document.getElementById('player-info').querySelector('h2').textContent = `Peasant #${player.id.substring(0, 6)}`;
+            document.getElementById('occupation-status').textContent = `Occupation: ${player.occupation}`;
+            const playerStatusEl = document.getElementById('player-status');
+            const isJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
+
+            if (isJailed) {
+                playerStatusEl.textContent = `Status: Jailed (${Math.round((player.unJailTimestamp - Date.now())/1000)}s)`;
+                playerStatusEl.className = 'text-sm text-blue-400';
+            } else if (player.isWanted) {
+                playerStatusEl.textContent = 'Status: Wanted';
+                playerStatusEl.className = 'text-sm text-red-500 font-bold';
+            } else {
+                playerStatusEl.textContent = '';
+            }
+            document.getElementById('money-value').textContent = `$${player.money}`;
+        }
+
         // --- Game Logic: Update Loop ---
-        function update(db, playerDocRef) {
+        function update() {
             let moved = false;
             if (gameState === 'playing') {
                 const isJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
@@ -200,23 +224,25 @@
                     if (keys.a && player.x > playerSize/2) { player.x -= player.speed; moved = true; }
                     if (keys.d && player.x < canvas.width - playerSize/2) { player.x += player.speed; moved = true; }
                 }
-                
-                if (moved && playerDocRef) {
-                     updateDoc(playerDocRef, { x: player.x, y: player.y }); 
+
+                if (moved) {
+                    allPlayers[player.id] = {...player}; // Update player's position for drawing
                 }
+
 
                 if (player.occupation && jobConfig[player.occupation]) {
                     const job = jobConfig[player.occupation];
                     const now = Date.now();
                     if (!lastPayday[player.occupation] || now - lastPayday[player.occupation] > job.interval) {
                         lastPayday[player.occupation] = now;
-                        updateDoc(playerDocRef, { money: player.money + job.pay });
+                        player.money += job.pay;
                         showNotification(`Payday! +$${job.pay} for being ${player.occupation}`, 'info');
                     }
                 }
             }
+            updateHUD();
         }
-        
+
         // --- Game Logic: Drawing ---
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -233,7 +259,7 @@
                 ctx.fillText('Loading Assets...', canvas.width/2, canvas.height/2);
             }
         }
-        
+
         function drawPlaying() {
             canvas.style.backgroundColor = '#3a543a';
 
@@ -277,16 +303,16 @@
                     ctx.fillText(appearanceMap[allPlayers[ownerId].appearance] || '🧍', prop.x + prop.width / 2, prop.y + prop.height + 30);
                 }
             });
-            
+
             // Draw Interaction Points
             Object.entries(interactionPoints).forEach(([key, point]) => {
                 let shouldDraw = true;
                 ctx.beginPath();
                 ctx.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
-                
+
                 let isTaken = false;
                 if (point.type === "JOB") {
-                    isTaken = worldState.jobs[key];
+                    isTaken = !!worldState.jobs[key];
                 } else if (point.type === "PROPERTY") {
                     if(worldState.properties && worldState.properties[point.propertyId]?.owner) {
                         shouldDraw = false;
@@ -301,7 +327,7 @@
                         ctx.fillText(`$${prop.cost.toLocaleString()}`, point.x, point.y + 35);
                     }
                 }
-                
+
                 if (shouldDraw) {
                     ctx.fillStyle = isTaken ? 'rgba(220, 38, 38, 0.7)' : 'rgba(251, 191, 36, 0.7)';
                     ctx.fill();
@@ -310,19 +336,9 @@
                 }
             });
 
-            // Draw players
-            ctx.font = `${playerSize}px Inter`;
-            Object.values(allPlayers).forEach(p => {
-                if (p.id !== player.id && p.characterCreated) {
-                    if (p.isWanted) { ctx.shadowColor = 'red'; ctx.shadowBlur = 20; }
-                    const emoji = appearanceMap[p.appearance] || '🧍';
-                    ctx.fillText(emoji, p.x - playerSize/2, p.y + playerSize/2);
-                    ctx.shadowBlur = 0;
-                }
-            });
-
             // Draw local player
             if (player.isWanted) { ctx.shadowColor = 'red'; ctx.shadowBlur = 20; }
+            ctx.font = `${playerSize}px Inter`;
             ctx.fillText(playerEmoji, player.x - playerSize/2, player.y + playerSize/2);
             ctx.shadowBlur = 0;
 
@@ -344,11 +360,11 @@
             ctx.font = '20px Inter';
             ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
             ctx.fillText('Click to begin your new life.', canvas.width/2, canvas.height/2 - 150);
-            
+
             creationChoices.forEach(choice => {
                 const isHovered = mousePos.x > choice.x && mousePos.x < choice.x + choice.width &&
                                   mousePos.y > choice.y && mousePos.y < choice.y + choice.height;
-                
+
                 ctx.fillStyle = isHovered ? '#374151' : '#1f2937';
                 ctx.fillRect(choice.x, choice.y, choice.width, choice.height);
                 ctx.strokeStyle = isHovered ? '#9ca3af' : '#4b5563';
@@ -363,7 +379,7 @@
         }
 
         // --- Game Logic: Interactions ---
-        function handleCanvasClick(e, db, playerDocRef) {
+        function handleCanvasClick(e) {
             if (gameState !== 'characterCreation') return;
 
             const rect = canvas.getBoundingClientRect();
@@ -373,70 +389,62 @@
             for (const choice of creationChoices) {
                  if (clickX > choice.x && clickX < choice.x + choice.width &&
                      clickY > choice.y && clickY < choice.y + choice.height) {
-                    
-                    updateDoc(playerDocRef, {
-                        characterCreated: true,
-                        appearance: choice.type
-                    }).then(() => {
-                        showNotification(`Welcome, new ${choice.type.toLowerCase()}!`, 'success');
-                    }).catch(err => {
-                        console.error("Failed to create character:", err);
-                        showNotification("Error creating character. Please try again.", "error");
-                    });
-                    break; 
+
+                    player.characterCreated = true;
+                    player.appearance = choice.type;
+                    playerEmoji = appearanceMap[player.appearance];
+                    allPlayers[player.id] = {...player}; // Add player to drawable players
+                    gameState = 'playing';
+                    canvas.style.cursor = 'pointer';
+                    showNotification(`Welcome, new ${choice.type.toLowerCase()}!`, 'success');
+                    break;
                  }
             }
         }
 
-        async function handleInteraction(e, db, playerDocRef, worldStateRef) {
+        function handleInteraction(e) {
              if (gameState !== 'playing' || (e.key !== 'e' && e.key !== 'E') || isRobbing) return;
 
              for (const [key, point] of Object.entries(interactionPoints)) {
                 const dist = Math.hypot(player.x - point.x, player.y - point.y);
                 if (dist < point.radius + playerSize / 2) {
-                    if (point.type === "JOB") handleJobClaim(db, playerDocRef, worldStateRef, key, point);
-                    else if (point.type === "ROLE") handleRoleClaim(playerDocRef, point);
-                    else if (point.type === "CRIME") handleCrime(db, playerDocRef, point);
-                    else if (point.type === "PROPERTY") handlePropertyPurchase(db, playerDocRef, worldStateRef, point.propertyId);
+                    if (point.type === "JOB") handleJobClaim(key, point);
+                    else if (point.type === "ROLE") handleRoleClaim(point);
+                    else if (point.type === "CRIME") handleCrime(point);
+                    else if (point.type === "PROPERTY") handlePropertyPurchase(point.propertyId);
                     return;
                 }
              }
-
-             if (player.occupation === "Police Officer") handleArrest(db, playerDocRef);
         }
 
-        async function handleJobClaim(db, playerDocRef, worldStateRef, jobKey, point) {
-            try {
-                await runTransaction(db, async (transaction) => {
-                    const worldDoc = await transaction.get(worldStateRef);
-                    const currentJobs = worldDoc.data()?.jobs || {};
-                    
-                    if (!currentJobs[jobKey]) {
-                        transaction.update(worldStateRef, { [`jobs.${jobKey}`]: player.id });
-                        transaction.update(playerDocRef, { occupation: point.jobName });
-                        showNotification(`You are now the ${point.jobName}!`, 'success');
-                    } else if (currentJobs[jobKey] !== player.id) {
-                        showNotification(`The ${point.jobName} position is already taken.`, 'error');
-                    } else {
-                         showNotification(`You are already the ${point.jobName}.`, 'info');
+        function handleJobClaim(jobKey, point) {
+            if (!worldState.jobs[jobKey]) {
+                // If another player has a job, they must lose it first
+                for(const k in worldState.jobs) {
+                    if(worldState.jobs[k] === player.id) {
+                        delete worldState.jobs[k];
                     }
-                });
-            } catch (error) {
-                console.error("Job transaction failed: ", error);
-                showNotification("Could not claim job. Try again.", "error");
+                }
+                worldState.jobs[jobKey] = player.id;
+                player.occupation = point.jobName;
+                showNotification(`You are now the ${point.jobName}!`, 'success');
+            } else if (worldState.jobs[jobKey] !== player.id) {
+                showNotification(`The ${point.jobName} position is already taken.`, 'error');
+            } else {
+                 showNotification(`You are already the ${point.jobName}.`, 'info');
             }
         }
 
-        async function handleRoleClaim(playerDocRef, point) {
+        function handleRoleClaim(point) {
             if (player.occupation === point.roleName) {
                 showNotification(`You are already a ${point.roleName}.`, 'info');
                 return;
             }
-            await updateDoc(playerDocRef, { occupation: point.roleName });
+            player.occupation = point.roleName;
             showNotification(`You are now a ${point.roleName}!`, 'success');
         }
-        
-        async function handleCrime(db, playerDocRef, point) {
+
+        function handleCrime(point) {
             if (point.crimeName === "Bank Robbery") {
                 if (player.isWanted) {
                     showNotification("You are already wanted!", "error");
@@ -444,17 +452,13 @@
                 }
                 isRobbing = true;
                 showNotification("Robbery in progress... stay in the circle!", "info");
-                setTimeout(async () => {
-                    const latestPlayerDoc = await getDoc(playerDocRef);
-                    const latestPlayer = latestPlayerDoc.data();
-                    const dist = Math.hypot(latestPlayer.x - point.x, latestPlayer.y - point.y);
+                setTimeout(() => {
+                    const dist = Math.hypot(player.x - point.x, player.y - point.y);
 
                     if (dist < point.radius + playerSize / 2) {
                         const robberyAmount = 250;
-                        await updateDoc(playerDocRef, {
-                            money: latestPlayer.money + robberyAmount,
-                            isWanted: true
-                        });
+                        player.money += robberyAmount;
+                        player.isWanted = true;
                         showNotification(`Robbery successful! You stole $${robberyAmount}`, "success");
                     } else {
                         showNotification("Robbery failed. You moved away.", "error");
@@ -464,229 +468,55 @@
             }
         }
 
-        async function handlePropertyPurchase(db, playerDocRef, worldStateRef, propertyId) {
+        function handlePropertyPurchase(propertyId) {
             const property = properties[propertyId];
             if (!property) return;
 
-            try {
-                await runTransaction(db, async (transaction) => {
-                    const worldDoc = await transaction.get(worldStateRef);
-                    const playerDoc = await transaction.get(playerDocRef);
-
-                    if (!worldDoc.exists() || !playerDoc.exists()) throw "Document not found";
-                    
-                    const currentProperties = worldDoc.data().properties || {};
-                    const playerData = playerDoc.data();
-
-                    if (currentProperties[propertyId]?.owner) {
-                        showNotification("This property is already owned.", "error");
-                        return;
-                    }
-
-                    if (playerData.money < property.cost) {
-                        showNotification(`You can't afford this house. You need $${property.cost.toLocaleString()}.`, "error");
-                        return;
-                    }
-
-                    const newMoney = playerData.money - property.cost;
-                    transaction.update(playerDocRef, { money: newMoney });
-                    transaction.update(worldStateRef, { [`properties.${propertyId}.owner`]: playerData.id });
-                    
-                    showNotification(`Congratulations! You bought the ${property.name}.`, "success");
-                });
-            } catch (error) {
-                console.error("Property purchase failed: ", error);
-                showNotification("Could not buy property. Someone may have bought it first.", "error");
+            if (worldState.properties[propertyId]?.owner) {
+                showNotification("This property is already owned.", "error");
+                return;
             }
+
+            if (player.money < property.cost) {
+                showNotification(`You can't afford this house. You need $${property.cost.toLocaleString()}.`, "error");
+                return;
+            }
+
+            player.money -= property.cost;
+            worldState.properties[propertyId].owner = player.id;
+            showNotification(`Congratulations! You bought the ${property.name}.`, "success");
         }
 
-        async function handleArrest(db, playerDocRef) {
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            for (const p of Object.values(allPlayers)) {
-                if (p.isWanted && p.id !== player.id) {
-                    let criminalInSafeZone = false;
-                    if (worldState.properties) {
-                        for (const [propId, propData] of Object.entries(worldState.properties)) {
-                            if (propData.owner === p.id && isPlayerInZone(p, properties[propId])) {
-                                criminalInSafeZone = true;
-                                break;
-                            }
-                        }
-                    }
 
-                    if (criminalInSafeZone) {
-                        showNotification(`Cannot arrest. Target is in their safe house.`, 'error');
-                        continue;
-                    }
-
-                    const dist = Math.hypot(player.x - p.x, player.y - p.y);
-                    if (dist < playerSize * 1.5) { 
-                        const criminalRef = doc(db, `artifacts/${appId}/users/${p.id}/playerData/main`);
-                        const jailSentence = 30000;
-                        const arrestBonus = jobConfig["Police Officer"].arrestBonus;
-
-                        try {
-                            await runTransaction(db, async (transaction) => {
-                                const criminalDoc = await transaction.get(criminalRef);
-                                const officerDoc = await transaction.get(playerDocRef);
-                                if (!criminalDoc.exists() || !officerDoc.exists()) throw "Player document not found!";
-                                
-                                transaction.update(criminalRef, {
-                                    isWanted: false,
-                                    unJailTimestamp: Date.now() + jailSentence,
-                                    x: zones.jail.x + zones.jail.width / 2,
-                                    y: zones.jail.y + zones.jail.height / 2
-                                });
-                                
-                                transaction.update(playerDocRef, {
-                                    money: officerDoc.data().money + arrestBonus
-                                });
-                            });
-
-                            showNotification(`You arrested Peasant #${p.id.substring(0, 6)} and earned $${arrestBonus}!`, 'success');
-                        } catch (error) {
-                            console.error("Arrest failed:", error);
-                            showNotification("Arrest failed. Could not find player data or another officer was faster.", "error");
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-
-        // --- Firebase and Main Game Loop Initialization ---
-        async function main() {
+        // --- Main Game Loop Initialization ---
+        function main() {
             loadAssets(() => {
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-                const firebaseConfig = { apiKey: "AIza...", authDomain: "...", projectId: "..." }; // Example, will be replaced
-                
-                try {
-                     const parsedConfig = JSON.parse(__firebase_config);
-                     Object.assign(firebaseConfig, parsedConfig);
-                } catch(e) {
-                    console.warn("Could not parse __firebase_config. Using placeholder. This is expected in local development.")
-                }
+                gameState = 'characterCreation'; // Start at character creation
+                canvas.style.cursor = 'default';
 
-
-                const app = initializeApp(firebaseConfig);
-                const auth = getAuth(app);
-                const db = getFirestore(app);
-                
-                onAuthStateChanged(auth, (user) => {
-                    if (!user) { return; }
-
-                    const userId = user.uid;
-                    const playerDocRef = doc(db, `artifacts/${appId}/users/${userId}/playerData/main`);
-                    const worldStateRef = doc(db, `artifacts/${appId}/public/data/worldState/main`);
-                    
-                    if (!listenersAttached) {
-                        onSnapshot(worldStateRef, (docSnap) => {
-                            if (docSnap.exists()) {
-                                worldState = docSnap.data();
-                            } else {
-                                const initialProperties = {};
-                                Object.keys(properties).forEach(id => { initialProperties[id] = { owner: null }; });
-                                setDoc(worldStateRef, { jobs: {}, properties: initialProperties });
-                            }
-                        });
-
-                         onSnapshot(collection(db, `artifacts/${appId}/public/data/players`), (snapshot) => {
-                            snapshot.docChanges().forEach((change) => {
-                                if (change.type === "removed") { delete allPlayers[change.doc.id]; } 
-                                else { allPlayers[change.doc.id] = change.doc.data(); }
-                            });
-                        });
-
-                        onSnapshot(playerDocRef, (docSnap) => {
-                            const hud = document.getElementById('hud');
-                            if (docSnap.exists() && docSnap.data().characterCreated) {
-                                const data = docSnap.data();
-                                const wasJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
-                                const isNowJailed = data.unJailTimestamp && Date.now() < data.unJailTimestamp;
-                                
-                                player = { ...player, ...data, id: userId };
-                                playerEmoji = appearanceMap[player.appearance] || '🧍';
-                                gameState = 'playing';
-                                canvas.style.cursor = 'pointer';
-                                hud.classList.remove('hidden');
-
-                                if (!wasJailed && isNowJailed) { showNotification("You have been jailed!", "error"); }
-
-                                const publicPlayerDocRef = doc(db, `artifacts/${appId}/public/data/players/${userId}`);
-                                setDoc(publicPlayerDocRef, {
-                                    id: userId, x: player.x, y: player.y,
-                                    appearance: player.appearance, isWanted: player.isWanted, characterCreated: true
-                                }, { merge: true });
-
-                            } else {
-                                 gameState = 'characterCreation';
-                                 canvas.style.cursor = 'default';
-                                player.id = userId;
-                                if (!docSnap.exists()){
-                                     setDoc(playerDocRef, { 
-                                         id: userId, x: player.x, y: player.y, money: 100, 
-                                         occupation: "Unemployed", inventory: [], createdAt: serverTimestamp(), 
-                                         characterCreated: false, appearance: 'wisp', isWanted: false, unJailTimestamp: null 
-                                    });
-                                }
-                                hud.classList.add('hidden');
-                            }
-
-                            document.getElementById('player-info').querySelector('h2').textContent = `Peasant #${userId.substring(0, 6)}`;
-                            document.getElementById('occupation-status').textContent = `Occupation: ${player.occupation}`;
-                            const playerStatusEl = document.getElementById('player-status');
-                            const isJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
-                            if (isJailed) {
-                                playerStatusEl.textContent = `Status: Jailed (${Math.round((player.unJailTimestamp - Date.now())/1000)}s)`;
-                                playerStatusEl.className = 'text-sm text-blue-400';
-                            } else if (player.isWanted) {
-                                playerStatusEl.textContent = 'Status: Wanted';
-                                playerStatusEl.className = 'text-sm text-red-500 font-bold';
-                            } else {
-                                playerStatusEl.textContent = '';
-                            }
-                            document.getElementById('money-value').textContent = `$${player.money}`;
-                        });
-                        
-                        window.addEventListener('keydown', (e) => {
-                            if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) keys[e.key.toLowerCase()] = true;
-                            handleInteraction(e, db, playerDocRef, worldStateRef);
-                        });
-                        window.addEventListener('keyup', (e) => {
-                            if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) keys[e.key.toLowerCase()] = false;
-                        });
-                        canvas.addEventListener('click', (e) => handleCanvasClick(e, db, playerDocRef));
-                        canvas.addEventListener('mousemove', (e) => {
-                            const rect = canvas.getBoundingClientRect();
-                            mousePos.x = e.clientX - rect.left;
-                            mousePos.y = e.clientY - rect.top;
-                        });
-                        
-                        listenersAttached = true;
-                    }
-
-                    if (!gameLoopStarted) {
-                        recalculateCreationChoices();
-                        gameLoopStarted = true;
-                        requestAnimationFrame(function gameLoop() {
-                            update(db, playerDocRef);
-                            draw();
-                            requestAnimationFrame(gameLoop);
-                        });
-                    }
+                window.addEventListener('keydown', (e) => {
+                    if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) keys[e.key.toLowerCase()] = true;
+                    handleInteraction(e);
+                });
+                window.addEventListener('keyup', (e) => {
+                    if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) keys[e.key.toLowerCase()] = false;
+                });
+                canvas.addEventListener('click', (e) => handleCanvasClick(e));
+                canvas.addEventListener('mousemove', (e) => {
+                    const rect = canvas.getBoundingClientRect();
+                    mousePos.x = e.clientX - rect.left;
+                    mousePos.y = e.clientY - rect.top;
                 });
 
-                (async () => {
-                    try {
-                        if (auth.currentUser) return;
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else { await signInAnonymously(auth); }
-                    } catch (error) { console.error("Authentication failed:", error); }
-                })();
+                recalculateCreationChoices();
+                requestAnimationFrame(function gameLoop() {
+                    update();
+                    draw();
+                    requestAnimationFrame(gameLoop);
+                });
             });
         }
-        
+
         function recalculateCreationChoices() {
             creationChoices.length = 0;
             const choiceWidth = 180;
@@ -701,11 +531,11 @@
                 { type: 'Woman', emoji: '👩', x: startX + choiceWidth + gap, y: startY, width: choiceWidth, height: choiceHeight }
             );
         }
-        
+
         window.addEventListener('resize', () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            
+
             zones.shop.x = canvas.width - 200;
             zones.shop.y = canvas.height - 150;
             zones.cityHall.x = canvas.width/2 - 75;
@@ -717,7 +547,7 @@
             zones.jail.y = canvas.height - 150;
             properties.house1.y = canvas.height - 200;
             properties.house2.y = canvas.height - 350;
-            
+
             interactionPoints.mayor.x = zones.cityHall.x + zones.cityHall.width/2;
             interactionPoints.doctor.x = zones.hospital.x + zones.hospital.width/2;
             interactionPoints.police.x = zones.policeStation.x + zones.policeStation.width/2;
@@ -726,10 +556,10 @@
             interactionPoints.buyHouse1.y = properties.house1.y + properties.house1.height + 15;
             interactionPoints.buyHouse2.x = properties.house2.x + properties.house2.width/2;
             interactionPoints.buyHouse2.y = properties.house2.y + properties.house2.height + 15;
-            
+
             recalculateCreationChoices();
         });
-        
+
         main();
     </script>
 </body>
