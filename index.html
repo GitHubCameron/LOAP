@@ -92,6 +92,7 @@
             speed: 4, money: 100, occupation: "Unemployed", inventory: [],
             appearance: 'wisp', isWanted: false, unJailTimestamp: null,
             characterCreated: false
+            facingDirection: 'right'
         };
         let allPlayers = {}; // Will only contain the local player in this version
         let worldState = { jobs: {}, properties: {} };
@@ -105,6 +106,7 @@
         const assetSources = {
             bank: 'bank.png',
             policeStation: 'policestation.png' // <-- CORRECTED LINE
+            playerSprite: 'peasant_male.png'
         };
 
         function loadAssets(callback) {
@@ -221,8 +223,8 @@
                 if (!isJailed && !isRobbing) {
                     if (keys.w && player.y > playerSize/2) { player.y -= player.speed; moved = true; }
                     if (keys.s && player.y < canvas.height - playerSize/2) { player.y += player.speed; moved = true; }
-                    if (keys.a && player.x > playerSize/2) { player.x -= player.speed; moved = true; }
-                    if (keys.d && player.x < canvas.width - playerSize/2) { player.x += player.speed; moved = true; }
+                    if (keys.a && player.x > playerSize/2) { player.x -= player.speed; moved = true; player.facingDirection = 'left';}
+                    if (keys.d && player.x < canvas.width - playerSize/2) { player.x += player.speed; moved = true; player.facingDirection = 'right';}
                 }
 
                 if (moved) {
@@ -260,30 +262,62 @@
             }
         }
 
-        function drawPlaying() {
-            canvas.style.backgroundColor = '#3a543a';
+// PASTE THIS ENTIRE BLOCK TO REPLACE THE OLD FUNCTION
+function drawPlaying() {
+    // This part remains the same
+    canvas.style.backgroundColor = '#3a543a';
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
 
-            // Draw zones
-            Object.values(zones).forEach(zone => {
-                if (zone.img && assets[zone.img]) {
-                    ctx.drawImage(assets[zone.img], zone.x, zone.y, zone.width, zone.height);
-                } else {
-                    ctx.fillStyle = zone.color;
-                    ctx.fillRect(zone.x, zone.y, zone.width, zone.height);
-                    ctx.fillStyle = 'white';
-                    ctx.textAlign = 'center';
-                    ctx.font = 'bold 20px Inter';
-                    const emojiOffset = (zone.name === "City Hall" || zone.name === "Police Dept") ? 30 : 20;
-                    if (zone.emoji) {
-                         ctx.fillText(zone.name, zone.x + zone.width / 2, zone.y + 25);
-                         ctx.font = '48px Inter';
-                         ctx.fillText(zone.emoji, zone.x + zone.width / 2, zone.y + zone.height / 2 + emojiOffset);
-                    } else {
-                         ctx.fillText(zone.name, zone.x + zone.width / 2, zone.y + 25);
-                    }
-                }
-            });
+    // ... (all the code for drawing zones, properties, etc., stays the same) ...
+    // Make sure your existing code for drawing the world is still here.
 
+
+    // --- START: NEW PLAYER DRAWING LOGIC ---
+
+    const spriteAsset = assets.playerSprite;
+    const spriteWidth = 60; // The desired in-game size
+    const spriteHeight = 60;
+
+    if (spriteAsset) { // Only draw if the asset has loaded
+        ctx.save(); // Save the canvas state before we transform it
+
+        // Move the canvas origin to the player's position
+        ctx.translate(player.x, player.y);
+
+        if (player.facingDirection === 'left') {
+            // Scale by -1 on the x-axis to flip horizontally
+            ctx.scale(-1, 1);
+        }
+
+        // Draw the sprite. We draw at (0,0) because we've already translated
+        // the canvas. We use negative offsets to center the image on the player's anchor point.
+        ctx.drawImage(spriteAsset, -spriteWidth / 2, -spriteHeight / 2, spriteWidth, spriteHeight);
+
+        ctx.restore(); // Restore the canvas to its original state (unflipped)
+    }
+
+    // --- END: NEW PLAYER DRAWING LOGIC ---
+
+
+    if (isRobbing) {
+        // ... (this part remains the same)
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('Robbing...', player.x, player.y - playerSize / 2 - 10);
+    }
+
+    // Draw NPCs (if you have them)
+    ctx.font = `${playerSize}px Inter`;
+    npcs.forEach(npc => {
+        ctx.fillText('🚶', npc.x - playerSize / 2, npc.y + playerSize / 2);
+    });
+
+
+    // This part remains the same
+    ctx.restore();
+}
             // Draw properties
             Object.entries(properties).forEach(([id, prop]) => {
                 const ownerId = worldState.properties[id]?.owner;
@@ -502,7 +536,7 @@
                     if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) keys[e.key.toLowerCase()] = false;
                 });
                 canvas.addEventListener('click', (e) => handleCanvasClick(e));
-                canvas.addEventListener('mousemove', (e) => {
+                canvas.addEventListener('mouse', (e) => {
                     const rect = canvas.getBoundingClientRect();
                     mousePos.x = e.clientX - rect.left;
                     mousePos.y = e.clientY - rect.top;
