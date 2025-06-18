@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life of a Peasant - Alpha</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            background-color: #111827;
+        }
+        canvas {
+            background-color: #3a543a; /* A slightly lighter, more detailed green */
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.02) 2px, transparent 2px),
+                linear-gradient(90deg, rgba(255,255,255,0.02) 2px, transparent 2px);
+            background-size: 40px 40px;
+            display: block;
+            cursor: pointer;
+        }
+        .hud {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: stretch;
+        }
+        .notification {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(22, 163, 74, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            opacity: 0;
+            transition: all 0.5s ease-in-out;
+            z-index: 100;
+            pointer-events: none;
+        }
+        .notification.error { background-color: rgba(220, 38, 38, 0.8); }
+        .notification.info { background-color: rgba(59, 130, 246, 0.8); }
+        .hud.hidden { display: none; }
+    </style>
+</head>
+<body class="text-white flex items-center justify-center h-screen m-0">
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="hud" class="hud p-4 space-x-4">
+        <div id="player-info" class="pr-4 border-r border-gray-600">
+            <h2 class="text-lg font-bold">Peasant...</h2>
+            <p id="occupation-status" class="text-sm text-gray-400">Occupation: Unemployed</p>
+            <p id="player-status" class="text-sm text-yellow-400"></p>
+        </div>
+        <div id="money-display" class="text-center pr-4 border-r border-gray-600">
+             <p class="text-xs text-green-400 uppercase tracking-wider">Balance</p>
+            <p id="money-value" class="text-2xl font-mono font-bold text-green-300">$0</p>
+        </div>
+        <div id="inventory-display" class="text-center">
+            <p class="text-xs text-yellow-400 uppercase tracking-wider">Inventory</p>
+            <div id="inventory-items" class="text-2xl font-bold text-yellow-300 h-full flex items-center justify-center min-w-[50px]"></div>
+        </div>
+    </div>
+    
+    <div id="notification" class="notification"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc, updateDoc, collection, serverTimestamp, runTransaction, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Core Game Setup ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let gameState = 'loading';
+        let player = { 
+            id: null, x: canvas.width / 2, y: canvas.height / 2, 
+            speed: 4, money: 0, occupation: "Unemployed", inventory: [], 
+            appearance: 'wisp', isWanted: false, unJailTimestamp: null 
+        };
+        let allPlayers = {}; 
+        let worldState = { jobs: {}, properties: {} };
+        const appearanceMap = { 'Man': '👨', 'Woman': '👩', 'wisp': '👻' };
+        let playerEmoji = appearanceMap.wisp;
+        const playerSize = 40;
+        let isRobbing = false;
+
+        // --- Asset Management ---
+        const assets = {};
+        const assetSources = {
+            bank: './bank.png' // Updated to the local filename you specified
+        };
+
+        function loadAssets(callback) {
+            let loadedCount = 0;
+            const totalAssets = Object.keys(assetSources).length;
+            if (totalAssets === 0) {
+                callback();
+                return;
+            }
+            for (const key in assetSources) {
+                const img = new Image();
+                img.src = assetSources[key];
+                img.onload = () => {
+                    assets[key] = img;
+                    loadedCount++;
+                    if (loadedCount === totalAssets) {
+                        callback();
+                    }
+                };
+                img.onerror = () => {
+                    console.error(`Failed to load asset: ${key} from path ${assetSources[key]}`);
+                    loadedCount++;
+                     if (loadedCount === totalAssets) {
+                        callback();
+                    }
+                };
+            }
+        }
+
+        // --- World Configuration ---
+        const zones = {
+            forest: { name: "Forest", x: 50, y: 50, width: 300, height: 250, color: 'rgba(16, 85, 42, 0.5)' },
+            shop: { name: "Shop", emoji: '🏪', x: canvas.width - 200, y: canvas.height - 150, width: 150, height: 100, color: 'rgba(217, 119, 6, 0.4)' },
+            cityHall: { name: "City Hall", emoji: '🏛️', x: canvas.width/2 - 75, y: 50, width: 150, height: 100, color: 'rgba(156, 163, 175, 0.4)'},
+            hospital: { name: "Hospital", emoji: '🏥', x: canvas.width - 200, y: 50, width: 150, height: 100, color: 'rgba(239, 68, 68, 0.4)'},
+            bank: { name: "Bank", img: 'bank', x: 50, y: canvas.height - 200, width: 200, height: 150, color: 'rgba(22, 163, 74, 0.4)'},
+            policeStation: { name: "Police Dept", emoji: '🚓', x: canvas.width/2 - 100, y: canvas.height - 150, width: 200, height: 100, color: 'rgba(59, 130, 246, 0.4)'},
+            jail: { name: "Jail", emoji: '⛓️', x: canvas.width - 400, y: canvas.height - 150, width: 150, height: 100, color: 'rgba(107, 114, 128, 0.6)'}
+        };
+
+        const properties = {
+            house1: { name: "Cozy Cottage", emoji: '🏠', x: 400, y: canvas.height - 200, width: 120, height: 100, color: 'rgba(139, 69, 19, 0.6)', cost: 5000 },
+            house2: { name: "Suburban Villa", emoji: '🏡', x: 400, y: canvas.height - 350, width: 150, height: 120, color: 'rgba(165, 42, 42, 0.6)', cost: 12000 }
+        };
+        
+        const interactionPoints = {
+            mayor: { x: zones.cityHall.x + zones.cityHall.width/2, y: zones.cityHall.y + zones.cityHall.height - 20, radius: 15, type: "JOB", jobName: "Mayor" },
+            doctor: { x: zones.hospital.x + zones.hospital.width/2, y: zones.hospital.y + zones.hospital.height - 20, radius: 15, type: "JOB", jobName: "Doctor" },
+            police: { x: zones.policeStation.x + zones.policeStation.width/2, y: zones.policeStation.y + 20, radius: 15, type: "ROLE", roleName: "Police Officer" },
+            robbery: { x: zones.bank.x + zones.bank.width/2, y: zones.bank.y + zones.bank.height/2, radius: 15, type: "CRIME", crimeName: "Bank Robbery"},
+            buyHouse1: { x: properties.house1.x + properties.house1.width/2, y: properties.house1.y + properties.house1.height + 15, radius: 15, type: "PROPERTY", propertyId: "house1" },
+            buyHouse2: { x: properties.house2.x + properties.house2.width/2, y: properties.house2.y + properties.house2.height + 15, radius: 15, type: "PROPERTY", propertyId: "house2" }
+        };
+
+        const jobConfig = {
+            Mayor: { pay: 25, interval: 5000, type: "EXCLUSIVE" },
+            Doctor: { pay: 20, interval: 5000, type: "EXCLUSIVE" },
+            "Police Officer": { pay: 10, interval: 10000, arrestBonus: 50, type: "ROLE" }
+        };
+        let lastPayday = {};
+        const creationChoices = [];
+        const keys = { w: false, a: false, s: false, d: false };
+        let mousePos = { x: 0, y: 0 };
+        let gameLoopStarted = false;
+        let listenersAttached = false;
+        
+        // --- Utility Functions ---
+        function showNotification(text, type = 'success') {
+            const el = document.getElementById('notification');
+            el.textContent = text;
+            el.className = 'notification';
+            el.classList.add(type);
+            el.style.opacity = 1;
+            setTimeout(() => el.style.opacity = 0, 3000);
+        }
+
+        function isPlayerInZone(p, zone) {
+            return p.x > zone.x && p.x < zone.x + zone.width && p.y > zone.y && p.y < zone.y + zone.height;
+        }
+
+        // --- Game Logic: Update Loop ---
+        function update(db, playerDocRef) {
+            let moved = false;
+            if (gameState === 'playing') {
+                const isJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
+
+                if (!isJailed && !isRobbing) {
+                    if (keys.w && player.y > playerSize/2) { player.y -= player.speed; moved = true; }
+                    if (keys.s && player.y < canvas.height - playerSize/2) { player.y += player.speed; moved = true; }
+                    if (keys.a && player.x > playerSize/2) { player.x -= player.speed; moved = true; }
+                    if (keys.d && player.x < canvas.width - playerSize/2) { player.x += player.speed; moved = true; }
+                }
+                
+                if (moved && playerDocRef) {
+                     updateDoc(playerDocRef, { x: player.x, y: player.y }); 
+                }
+
+                if (player.occupation && jobConfig[player.occupation]) {
+                    const job = jobConfig[player.occupation];
+                    const now = Date.now();
+                    if (!lastPayday[player.occupation] || now - lastPayday[player.occupation] > job.interval) {
+                        lastPayday[player.occupation] = now;
+                        updateDoc(playerDocRef, { money: player.money + job.pay });
+                        showNotification(`Payday! +$${job.pay} for being ${player.occupation}`, 'info');
+                    }
+                }
+            }
+        }
+        
+        // --- Game Logic: Drawing ---
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (gameState === 'playing') {
+                drawPlaying();
+            } else if (gameState === 'characterCreation') {
+                drawCharacterCreation();
+            } else if (gameState === 'loading') {
+                ctx.fillStyle = '#111827';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.textAlign = 'center';
+                ctx.font = '24px Inter';
+                ctx.fillText('Loading Assets...', canvas.width/2, canvas.height/2);
+            }
+        }
+        
+        function drawPlaying() {
+            canvas.style.backgroundColor = '#3a543a';
+
+            // Draw zones
+            Object.values(zones).forEach(zone => {
+                if (zone.img && assets[zone.img]) {
+                    ctx.drawImage(assets[zone.img], zone.x, zone.y, zone.width, zone.height);
+                } else {
+                    ctx.fillStyle = zone.color;
+                    ctx.fillRect(zone.x, zone.y, zone.width, zone.height);
+                    ctx.fillStyle = 'white';
+                    ctx.textAlign = 'center';
+                    ctx.font = 'bold 20px Inter';
+                    const emojiOffset = (zone.name === "City Hall" || zone.name === "Police Dept") ? 30 : 20;
+                    if (zone.emoji) {
+                         ctx.fillText(zone.name, zone.x + zone.width / 2, zone.y + 25);
+                         ctx.font = '48px Inter';
+                         ctx.fillText(zone.emoji, zone.x + zone.width / 2, zone.y + zone.height / 2 + emojiOffset);
+                    } else {
+                         ctx.fillText(zone.name, zone.x + zone.width / 2, zone.y + 25);
+                    }
+                }
+            });
+
+            // Draw properties
+            Object.entries(properties).forEach(([id, prop]) => {
+                const ownerId = worldState.properties[id]?.owner;
+                ctx.fillStyle = prop.color;
+                ctx.fillRect(prop.x, prop.y, prop.width, prop.height);
+
+                ctx.fillStyle = 'white';
+                ctx.textAlign = 'center';
+                ctx.font = `bold ${prop.height / 5}px Inter`;
+                ctx.fillText(prop.name, prop.x + prop.width / 2, prop.y + 20);
+
+                ctx.font = `${prop.height/1.5}px Inter`;
+                ctx.fillText(prop.emoji, prop.x + prop.width / 2, prop.y + prop.height - 10);
+
+                if (ownerId && allPlayers[ownerId]) {
+                    ctx.font = `30px Inter`;
+                    ctx.fillText(appearanceMap[allPlayers[ownerId].appearance] || '🧍', prop.x + prop.width / 2, prop.y + prop.height + 30);
+                }
+            });
+            
+            // Draw Interaction Points
+            Object.entries(interactionPoints).forEach(([key, point]) => {
+                let shouldDraw = true;
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
+                
+                let isTaken = false;
+                if (point.type === "JOB") {
+                    isTaken = worldState.jobs[key];
+                } else if (point.type === "PROPERTY") {
+                    if(worldState.properties && worldState.properties[point.propertyId]?.owner) {
+                        shouldDraw = false;
+                    } else {
+                        ctx.font = 'bold 12px Inter';
+                        ctx.fillStyle = 'white';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('FOR SALE', point.x, point.y - 20);
+                        const prop = properties[point.propertyId];
+                        ctx.font = 'bold 14px Inter';
+                        ctx.fillStyle = '#facc15';
+                        ctx.fillText(`$${prop.cost.toLocaleString()}`, point.x, point.y + 35);
+                    }
+                }
+                
+                if (shouldDraw) {
+                    ctx.fillStyle = isTaken ? 'rgba(220, 38, 38, 0.7)' : 'rgba(251, 191, 36, 0.7)';
+                    ctx.fill();
+                    ctx.strokeStyle = isTaken ? 'red' : 'yellow';
+                    ctx.stroke();
+                }
+            });
+
+            // Draw players
+            ctx.font = `${playerSize}px Inter`;
+            Object.values(allPlayers).forEach(p => {
+                if (p.id !== player.id && p.characterCreated) {
+                    if (p.isWanted) { ctx.shadowColor = 'red'; ctx.shadowBlur = 20; }
+                    const emoji = appearanceMap[p.appearance] || '🧍';
+                    ctx.fillText(emoji, p.x - playerSize/2, p.y + playerSize/2);
+                    ctx.shadowBlur = 0;
+                }
+            });
+
+            // Draw local player
+            if (player.isWanted) { ctx.shadowColor = 'red'; ctx.shadowBlur = 20; }
+            ctx.fillText(playerEmoji, player.x - playerSize/2, player.y + playerSize/2);
+            ctx.shadowBlur = 0;
+
+            if (isRobbing) {
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 16px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText('Robbing...', player.x, player.y - playerSize / 2 - 10);
+            }
+        }
+
+        function drawCharacterCreation() {
+            canvas.style.backgroundColor = '#111827';
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 48px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillText('Choose Your Appearance', canvas.width/2, canvas.height/2 - 200);
+
+            ctx.font = '20px Inter';
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.fillText('Click to begin your new life.', canvas.width/2, canvas.height/2 - 150);
+            
+            creationChoices.forEach(choice => {
+                const isHovered = mousePos.x > choice.x && mousePos.x < choice.x + choice.width &&
+                                  mousePos.y > choice.y && mousePos.y < choice.y + choice.height;
+                
+                ctx.fillStyle = isHovered ? '#374151' : '#1f2937';
+                ctx.fillRect(choice.x, choice.y, choice.width, choice.height);
+                ctx.strokeStyle = isHovered ? '#9ca3af' : '#4b5563';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(choice.x, choice.y, choice.width, choice.height);
+                ctx.font = `${choice.width/2}px Inter`;
+                ctx.fillText(choice.emoji, choice.x + choice.width/2, choice.y + choice.height/2 + 10);
+                ctx.font = 'bold 20px Inter';
+                ctx.fillStyle = 'white';
+                ctx.fillText(choice.type, choice.x + choice.width/2, choice.y + choice.height - 20);
+            });
+        }
+
+        // --- Game Logic: Interactions ---
+        function handleCanvasClick(e, db, playerDocRef) {
+            if (gameState !== 'characterCreation') return;
+
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            for (const choice of creationChoices) {
+                 if (clickX > choice.x && clickX < choice.x + choice.width &&
+                     clickY > choice.y && clickY < choice.y + choice.height) {
+                    
+                    updateDoc(playerDocRef, {
+                        characterCreated: true,
+                        appearance: choice.type
+                    }).then(() => {
+                        showNotification(`Welcome, new ${choice.type.toLowerCase()}!`, 'success');
+                    }).catch(err => {
+                        console.error("Failed to create character:", err);
+                        showNotification("Error creating character. Please try again.", "error");
+                    });
+                    break; 
+                 }
+            }
+        }
+
+        async function handleInteraction(e, db, playerDocRef, worldStateRef) {
+             if (gameState !== 'playing' || (e.key !== 'e' && e.key !== 'E') || isRobbing) return;
+
+             for (const [key, point] of Object.entries(interactionPoints)) {
+                const dist = Math.hypot(player.x - point.x, player.y - point.y);
+                if (dist < point.radius + playerSize / 2) {
+                    if (point.type === "JOB") handleJobClaim(db, playerDocRef, worldStateRef, key, point);
+                    else if (point.type === "ROLE") handleRoleClaim(playerDocRef, point);
+                    else if (point.type === "CRIME") handleCrime(db, playerDocRef, point);
+                    else if (point.type === "PROPERTY") handlePropertyPurchase(db, playerDocRef, worldStateRef, point.propertyId);
+                    return;
+                }
+             }
+
+             if (player.occupation === "Police Officer") handleArrest(db, playerDocRef);
+        }
+
+        async function handleJobClaim(db, playerDocRef, worldStateRef, jobKey, point) {
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const worldDoc = await transaction.get(worldStateRef);
+                    const currentJobs = worldDoc.data()?.jobs || {};
+                    
+                    if (!currentJobs[jobKey]) {
+                        transaction.update(worldStateRef, { [`jobs.${jobKey}`]: player.id });
+                        transaction.update(playerDocRef, { occupation: point.jobName });
+                        showNotification(`You are now the ${point.jobName}!`, 'success');
+                    } else if (currentJobs[jobKey] !== player.id) {
+                        showNotification(`The ${point.jobName} position is already taken.`, 'error');
+                    } else {
+                         showNotification(`You are already the ${point.jobName}.`, 'info');
+                    }
+                });
+            } catch (error) {
+                console.error("Job transaction failed: ", error);
+                showNotification("Could not claim job. Try again.", "error");
+            }
+        }
+
+        async function handleRoleClaim(playerDocRef, point) {
+            if (player.occupation === point.roleName) {
+                showNotification(`You are already a ${point.roleName}.`, 'info');
+                return;
+            }
+            await updateDoc(playerDocRef, { occupation: point.roleName });
+            showNotification(`You are now a ${point.roleName}!`, 'success');
+        }
+        
+        async function handleCrime(db, playerDocRef, point) {
+            if (point.crimeName === "Bank Robbery") {
+                if (player.isWanted) {
+                    showNotification("You are already wanted!", "error");
+                    return;
+                }
+                isRobbing = true;
+                showNotification("Robbery in progress... stay in the circle!", "info");
+                setTimeout(async () => {
+                    const latestPlayerDoc = await getDoc(playerDocRef);
+                    const latestPlayer = latestPlayerDoc.data();
+                    const dist = Math.hypot(latestPlayer.x - point.x, latestPlayer.y - point.y);
+
+                    if (dist < point.radius + playerSize / 2) {
+                        const robberyAmount = 250;
+                        await updateDoc(playerDocRef, {
+                            money: latestPlayer.money + robberyAmount,
+                            isWanted: true
+                        });
+                        showNotification(`Robbery successful! You stole $${robberyAmount}`, "success");
+                    } else {
+                        showNotification("Robbery failed. You moved away.", "error");
+                    }
+                    isRobbing = false;
+                }, 5000);
+            }
+        }
+
+        async function handlePropertyPurchase(db, playerDocRef, worldStateRef, propertyId) {
+            const property = properties[propertyId];
+            if (!property) return;
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const worldDoc = await transaction.get(worldStateRef);
+                    const playerDoc = await transaction.get(playerDocRef);
+
+                    if (!worldDoc.exists() || !playerDoc.exists()) throw "Document not found";
+                    
+                    const currentProperties = worldDoc.data().properties || {};
+                    const playerData = playerDoc.data();
+
+                    if (currentProperties[propertyId]?.owner) {
+                        showNotification("This property is already owned.", "error");
+                        return;
+                    }
+
+                    if (playerData.money < property.cost) {
+                        showNotification(`You can't afford this house. You need $${property.cost.toLocaleString()}.`, "error");
+                        return;
+                    }
+
+                    const newMoney = playerData.money - property.cost;
+                    transaction.update(playerDocRef, { money: newMoney });
+                    transaction.update(worldStateRef, { [`properties.${propertyId}.owner`]: playerData.id });
+                    
+                    showNotification(`Congratulations! You bought the ${property.name}.`, "success");
+                });
+            } catch (error) {
+                console.error("Property purchase failed: ", error);
+                showNotification("Could not buy property. Someone may have bought it first.", "error");
+            }
+        }
+
+        async function handleArrest(db, playerDocRef) {
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            for (const p of Object.values(allPlayers)) {
+                if (p.isWanted && p.id !== player.id) {
+                    let criminalInSafeZone = false;
+                    if (worldState.properties) {
+                        for (const [propId, propData] of Object.entries(worldState.properties)) {
+                            if (propData.owner === p.id && isPlayerInZone(p, properties[propId])) {
+                                criminalInSafeZone = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (criminalInSafeZone) {
+                        showNotification(`Cannot arrest. Target is in their safe house.`, 'error');
+                        continue;
+                    }
+
+                    const dist = Math.hypot(player.x - p.x, player.y - p.y);
+                    if (dist < playerSize * 1.5) { 
+                        const criminalRef = doc(db, `artifacts/${appId}/users/${p.id}/playerData/main`);
+                        const jailSentence = 30000;
+                        const arrestBonus = jobConfig["Police Officer"].arrestBonus;
+
+                        try {
+                            await runTransaction(db, async (transaction) => {
+                                const criminalDoc = await transaction.get(criminalRef);
+                                const officerDoc = await transaction.get(playerDocRef);
+                                if (!criminalDoc.exists() || !officerDoc.exists()) throw "Player document not found!";
+                                
+                                transaction.update(criminalRef, {
+                                    isWanted: false,
+                                    unJailTimestamp: Date.now() + jailSentence,
+                                    x: zones.jail.x + zones.jail.width / 2,
+                                    y: zones.jail.y + zones.jail.height / 2
+                                });
+                                
+                                transaction.update(playerDocRef, {
+                                    money: officerDoc.data().money + arrestBonus
+                                });
+                            });
+
+                            showNotification(`You arrested Peasant #${p.id.substring(0, 6)} and earned $${arrestBonus}!`, 'success');
+                        } catch (error) {
+                            console.error("Arrest failed:", error);
+                            showNotification("Arrest failed. Could not find player data or another officer was faster.", "error");
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
+        // --- Firebase and Main Game Loop Initialization ---
+        async function main() {
+            loadAssets(() => {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const firebaseConfig = { apiKey: "AIza...", authDomain: "...", projectId: "..." }; // Example, will be replaced
+                
+                try {
+                     const parsedConfig = JSON.parse(__firebase_config);
+                     Object.assign(firebaseConfig, parsedConfig);
+                } catch(e) {
+                    console.warn("Could not parse __firebase_config. Using placeholder. This is expected in local development.")
+                }
+
+
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                const db = getFirestore(app);
+                
+                onAuthStateChanged(auth, (user) => {
+                    if (!user) { return; }
+
+                    const userId = user.uid;
+                    const playerDocRef = doc(db, `artifacts/${appId}/users/${userId}/playerData/main`);
+                    const worldStateRef = doc(db, `artifacts/${appId}/public/data/worldState/main`);
+                    
+                    if (!listenersAttached) {
+                        onSnapshot(worldStateRef, (docSnap) => {
+                            if (docSnap.exists()) {
+                                worldState = docSnap.data();
+                            } else {
+                                const initialProperties = {};
+                                Object.keys(properties).forEach(id => { initialProperties[id] = { owner: null }; });
+                                setDoc(worldStateRef, { jobs: {}, properties: initialProperties });
+                            }
+                        });
+
+                         onSnapshot(collection(db, `artifacts/${appId}/public/data/players`), (snapshot) => {
+                            snapshot.docChanges().forEach((change) => {
+                                if (change.type === "removed") { delete allPlayers[change.doc.id]; } 
+                                else { allPlayers[change.doc.id] = change.doc.data(); }
+                            });
+                        });
+
+                        onSnapshot(playerDocRef, (docSnap) => {
+                            const hud = document.getElementById('hud');
+                            if (docSnap.exists() && docSnap.data().characterCreated) {
+                                const data = docSnap.data();
+                                const wasJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
+                                const isNowJailed = data.unJailTimestamp && Date.now() < data.unJailTimestamp;
+                                
+                                player = { ...player, ...data, id: userId };
+                                playerEmoji = appearanceMap[player.appearance] || '🧍';
+                                gameState = 'playing';
+                                canvas.style.cursor = 'pointer';
+                                hud.classList.remove('hidden');
+
+                                if (!wasJailed && isNowJailed) { showNotification("You have been jailed!", "error"); }
+
+                                const publicPlayerDocRef = doc(db, `artifacts/${appId}/public/data/players/${userId}`);
+                                setDoc(publicPlayerDocRef, {
+                                    id: userId, x: player.x, y: player.y,
+                                    appearance: player.appearance, isWanted: player.isWanted, characterCreated: true
+                                }, { merge: true });
+
+                            } else {
+                                 gameState = 'characterCreation';
+                                 canvas.style.cursor = 'default';
+                                player.id = userId;
+                                if (!docSnap.exists()){
+                                     setDoc(playerDocRef, { 
+                                         id: userId, x: player.x, y: player.y, money: 100, 
+                                         occupation: "Unemployed", inventory: [], createdAt: serverTimestamp(), 
+                                         characterCreated: false, appearance: 'wisp', isWanted: false, unJailTimestamp: null 
+                                    });
+                                }
+                                hud.classList.add('hidden');
+                            }
+
+                            document.getElementById('player-info').querySelector('h2').textContent = `Peasant #${userId.substring(0, 6)}`;
+                            document.getElementById('occupation-status').textContent = `Occupation: ${player.occupation}`;
+                            const playerStatusEl = document.getElementById('player-status');
+                            const isJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
+                            if (isJailed) {
+                                playerStatusEl.textContent = `Status: Jailed (${Math.round((player.unJailTimestamp - Date.now())/1000)}s)`;
+                                playerStatusEl.className = 'text-sm text-blue-400';
+                            } else if (player.isWanted) {
+                                playerStatusEl.textContent = 'Status: Wanted';
+                                playerStatusEl.className = 'text-sm text-red-500 font-bold';
+                            } else {
+                                playerStatusEl.textContent = '';
+                            }
+                            document.getElementById('money-value').textContent = `$${player.money}`;
+                        });
+                        
+                        window.addEventListener('keydown', (e) => {
+                            if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) keys[e.key.toLowerCase()] = true;
+                            handleInteraction(e, db, playerDocRef, worldStateRef);
+                        });
+                        window.addEventListener('keyup', (e) => {
+                            if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) keys[e.key.toLowerCase()] = false;
+                        });
+                        canvas.addEventListener('click', (e) => handleCanvasClick(e, db, playerDocRef));
+                        canvas.addEventListener('mousemove', (e) => {
+                            const rect = canvas.getBoundingClientRect();
+                            mousePos.x = e.clientX - rect.left;
+                            mousePos.y = e.clientY - rect.top;
+                        });
+                        
+                        listenersAttached = true;
+                    }
+
+                    if (!gameLoopStarted) {
+                        recalculateCreationChoices();
+                        gameLoopStarted = true;
+                        requestAnimationFrame(function gameLoop() {
+                            update(db, playerDocRef);
+                            draw();
+                            requestAnimationFrame(gameLoop);
+                        });
+                    }
+                });
+
+                (async () => {
+                    try {
+                        if (auth.currentUser) return;
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else { await signInAnonymously(auth); }
+                    } catch (error) { console.error("Authentication failed:", error); }
+                })();
+            });
+        }
+        
+        function recalculateCreationChoices() {
+            creationChoices.length = 0;
+            const choiceWidth = 180;
+            const choiceHeight = 200;
+            const gap = 40;
+            const totalWidth = (choiceWidth * 2) + gap;
+            const startX = canvas.width/2 - totalWidth/2;
+            const startY = canvas.height/2 - choiceHeight/2;
+
+            creationChoices.push(
+                { type: 'Man', emoji: '👨', x: startX, y: startY, width: choiceWidth, height: choiceHeight },
+                { type: 'Woman', emoji: '👩', x: startX + choiceWidth + gap, y: startY, width: choiceWidth, height: choiceHeight }
+            );
+        }
+        
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            zones.shop.x = canvas.width - 200;
+            zones.shop.y = canvas.height - 150;
+            zones.cityHall.x = canvas.width/2 - 75;
+            zones.hospital.x = canvas.width - 200;
+            zones.bank.y = canvas.height - 200;
+            zones.policeStation.x = canvas.width/2 - 100;
+            zones.policeStation.y = canvas.height - 150;
+            zones.jail.x = canvas.width - 400;
+            zones.jail.y = canvas.height - 150;
+            properties.house1.y = canvas.height - 200;
+            properties.house2.y = canvas.height - 350;
+            
+            interactionPoints.mayor.x = zones.cityHall.x + zones.cityHall.width/2;
+            interactionPoints.doctor.x = zones.hospital.x + zones.hospital.width/2;
+            interactionPoints.police.x = zones.policeStation.x + zones.policeStation.width/2;
+            interactionPoints.robbery.x = zones.bank.x + zones.bank.width/2;
+            interactionPoints.buyHouse1.x = properties.house1.x + properties.house1.width/2;
+            interactionPoints.buyHouse1.y = properties.house1.y + properties.house1.height + 15;
+            interactionPoints.buyHouse2.x = properties.house2.x + properties.house2.width/2;
+            interactionPoints.buyHouse2.y = properties.house2.y + properties.house2.height + 15;
+            
+            recalculateCreationChoices();
+        });
+        
+        main();
+    </script>
+</body>
+</html>
