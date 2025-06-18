@@ -106,8 +106,8 @@
         // --- Asset Management ---
         const assets = {};
         const assetSources = {
-            bank: './bank.png',
-            policeStation: './policestation.jpg' // <<< CHANGE #1: ADDED POLICE STATION IMAGE
+            bank: './bank.png' // Updated to the local filename you specified
+            policeStation: './policestation.png'
         };
 
         function loadAssets(callback) {
@@ -144,7 +144,6 @@
             cityHall: { name: "City Hall", emoji: '🏛️', x: canvas.width/2 - 75, y: 50, width: 150, height: 100, color: 'rgba(156, 163, 175, 0.4)'},
             hospital: { name: "Hospital", emoji: '🏥', x: canvas.width - 200, y: 50, width: 150, height: 100, color: 'rgba(239, 68, 68, 0.4)'},
             bank: { name: "Bank", img: 'bank', x: 50, y: canvas.height - 200, width: 200, height: 150, color: 'rgba(22, 163, 74, 0.4)'},
-            // <<< CHANGE #2: MODIFIED POLICE STATION TO USE THE IMAGE
             policeStation: { name: "Police Dept", img: 'policeStation', x: canvas.width/2 - 100, y: canvas.height - 150, width: 200, height: 100, color: 'rgba(59, 130, 246, 0.4)'},
             jail: { name: "Jail", emoji: '⛓️', x: canvas.width - 400, y: canvas.height - 150, width: 150, height: 100, color: 'rgba(107, 114, 128, 0.6)'}
         };
@@ -248,7 +247,7 @@
                     ctx.fillStyle = 'white';
                     ctx.textAlign = 'center';
                     ctx.font = 'bold 20px Inter';
-                    const emojiOffset = (zone.name === "City Hall") ? 30 : 20;
+                    const emojiOffset = (zone.name === "City Hall" || zone.name === "Police Dept") ? 30 : 20;
                     if (zone.emoji) {
                          ctx.fillText(zone.name, zone.x + zone.width / 2, zone.y + 25);
                          ctx.font = '48px Inter';
