@@ -101,6 +101,46 @@
         const playerSize = 40;
         let isRobbing = false;
         let camera = { x: 0, y: 0 };
+        // --- NPC Configuration ---
+const npcPaths = {
+    path1: [
+        { x: zones.forest.x + 50, y: zones.forest.y + 280 },
+        { x: zones.shop.x - 50, y: zones.shop.y + 50 }
+    ],
+    path2: [
+        { x: zones.cityHall.x - 50, y: zones.cityHall.y + 50 },
+        { x: zones.bank.x + 230, y: zones.bank.y + 75 }
+    ]
+};
+
+const npcs = [
+    {
+        id: 'npc1',
+        x: zones.forest.x + 50,
+        y: zones.forest.y + 280,
+        emoji: '👨‍🌾',
+        speed: 0.8,
+        path: npcPaths.path1,
+        currentTargetIndex: 0,
+        dialogue: ["The harvest looks good this year.", "Mind yourself, the city is a busy place.", "I've got crops to tend to."],
+        isStopped: false,
+        activeDialogue: null,
+        dialogueTimestamp: 0
+    },
+    {
+        id: 'npc2',
+        x: zones.cityHall.x - 50,
+        y: zones.cityHall.y + 50,
+        emoji: '👩‍🌾',
+        speed: 0.6,
+        path: npcPaths.path2,
+        currentTargetIndex: 0,
+        dialogue: ["Watch out for the wanted folk.", "Sometimes I wish I could afford a cottage.", "Just trying to make an honest living."],
+        isStopped: false,
+        activeDialogue: null,
+        dialogueTimestamp: 0
+    }
+];
 
         // --- Asset Management ---
         const assets = {};
@@ -219,6 +259,7 @@
         function update() {
             let moved = false;
             if (gameState === 'playing') {
+                updateNPCs();
                 const isJailed = player.unJailTimestamp && Date.now() < player.unJailTimestamp;
 
                 if (!isJailed && !isRobbing) {
@@ -247,7 +288,32 @@
             }
             updateHUD();
         }
+function updateNPCs() {
+    const now = Date.now();
+    npcs.forEach(npc => {
+        // Check if dialogue should disappear
+        if (npc.activeDialogue && now > npc.dialogueTimestamp) {
+            npc.activeDialogue = null;
+            npc.isStopped = false; // Resume walking
+        }
 
+        if (npc.isStopped) return; // If stopped for interaction, do not move
+
+        const target = npc.path[npc.currentTargetIndex];
+        const dx = target.x - npc.x;
+        const dy = target.y - npc.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < npc.speed) {
+            // Reached the target, switch to the next one
+            npc.currentTargetIndex = (npc.currentTargetIndex + 1) % npc.path.length;
+        } else {
+            // Move towards the target
+            npc.x += (dx / dist) * npc.speed;
+            npc.y += (dy / dist) * npc.speed;
+        }
+    });
+}
         // --- Game Logic: Drawing ---
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
