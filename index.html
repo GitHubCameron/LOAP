@@ -377,11 +377,28 @@ function drawPlaying() {
         ctx.fillText('Robbing...', player.x, player.y - playerSize / 2 - 10);
     }
 
-    // Draw NPCs (if you have them)
+// Draw NPCs
+npcs.forEach(npc => {
+    // Draw the NPC emoji
     ctx.font = `${playerSize}px Inter`;
-    npcs.forEach(npc => {
-        ctx.fillText('🚶', npc.x - playerSize / 2, npc.y + playerSize / 2);
-    });
+    ctx.textAlign = 'center';
+    ctx.fillText(npc.emoji, npc.x, npc.y);
+
+    // Draw dialogue if it exists
+    if (npc.activeDialogue) {
+        ctx.font = 'bold 14px Inter';
+        const text = npc.activeDialogue;
+        const textWidth = ctx.measureText(text).width;
+        
+        // Draw a background for the text
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(npc.x - textWidth / 2 - 10, npc.y - playerSize - 25, textWidth + 20, 30);
+        
+        // Draw the text
+        ctx.fillStyle = 'white';
+        ctx.fillText(text, npc.x, npc.y - playerSize - 5);
+    }
+});
 
 
     // This part remains the same
@@ -439,20 +456,34 @@ function drawPlaying() {
             }
         }
 
-        function handleInteraction(e) {
-             if (gameState !== 'playing' || (e.key !== 'e' && e.key !== 'E') || isRobbing) return;
+function handleInteraction(e) {
+    if (gameState !== 'playing' || (e.key !== 'e' && e.key !== 'E') || isRobbing) return;
 
-             for (const [key, point] of Object.entries(interactionPoints)) {
-                const dist = Math.hypot(player.x - point.x, player.y - point.y);
-                if (dist < point.radius + playerSize / 2) {
-                    if (point.type === "JOB") handleJobClaim(key, point);
-                    else if (point.type === "ROLE") handleRoleClaim(point);
-                    else if (point.type === "CRIME") handleCrime(point);
-                    else if (point.type === "PROPERTY") handlePropertyPurchase(point.propertyId);
-                    return;
-                }
-             }
+    // --- Check for NPC Interaction ---
+    for (const npc of npcs) {
+        const dist = Math.hypot(player.x - npc.x, player.y - npc.y);
+        if (dist < playerSize + 20) { // Check if player is close to the NPC
+            npc.isStopped = true;
+            // Select a random piece of dialogue
+            const dialogueIndex = Math.floor(Math.random() * npc.dialogue.length);
+            npc.activeDialogue = npc.dialogue[dialogueIndex];
+            npc.dialogueTimestamp = Date.now() + 4000; // Show dialogue for 4 seconds
+            return; // Exit after interacting with one NPC
         }
+    }
+
+    // --- Check for Interaction Point Interaction ---
+    for (const [key, point] of Object.entries(interactionPoints)) {
+       const dist = Math.hypot(player.x - point.x, player.y - point.y);
+       if (dist < point.radius + playerSize / 2) {
+           if (point.type === "JOB") handleJobClaim(key, point);
+           else if (point.type === "ROLE") handleRoleClaim(point);
+           else if (point.type === "CRIME") handleCrime(point);
+           else if (point.type === "PROPERTY") handlePropertyPurchase(point.propertyId);
+           return;
+       }
+    }
+}
 
         function handleJobClaim(jobKey, point) {
             if (!worldState.jobs[jobKey]) {
