@@ -177,16 +177,28 @@ const npcs = [
             }
         }
 
-        // --- World Configuration ---
-        const zones = {
-            forest: { name: "Forest", x: 50, y: 50, width: 300, height: 250, color: 'rgba(16, 85, 42, 0.5)' },
-            shop: { name: "Shop", emoji: '🏪', x: canvas.width - 200, y: canvas.height - 150, width: 150, height: 100, color: 'rgba(217, 119, 6, 0.4)' },
-            cityHall: { name: "City Hall", emoji: '🏛️', x: canvas.width/2 - 75, y: 50, width: 150, height: 100, color: 'rgba(156, 163, 175, 0.4)'},
-            hospital: { name: "Hospital", emoji: '🏥', x: canvas.width - 200, y: 50, width: 150, height: 100, color: 'rgba(239, 68, 68, 0.4)'},
-            bank: { name: "Bank", img: 'bank', x: 50, y: canvas.height - 200, width: 200, height: 150, color: 'rgba(22, 163, 74, 0.4)'},
-            policeStation: { name: "Police Dept", img: 'policeStation', x: canvas.width/2 - 100, y: canvas.height - 150, width: 200, height: 100, color: 'rgba(59, 130, 246, 0.4)'},
-            jail: { name: "Jail", emoji: '⛓️', x: canvas.width - 400, y: canvas.height - 150, width: 150, height: 100, color: 'rgba(107, 114, 128, 0.6)'}
-        };
+// --- World Configuration ---
+const zones = {
+    forest: { name: "Forest", x: 50, y: 50, width: 300, height: 250, color: 'rgba(16, 85, 42, 0.5)' },
+    shop: { name: "Shop", emoji: '🏪', x: canvas.width - 200, y: canvas.height - 150, width: 150, height: 100, color: 'rgba(217, 119, 6, 0.4)' },
+    cityHall: { name: "City Hall", emoji: '🏛️', x: canvas.width/2 - 75, y: 50, width: 150, height: 100, color: 'rgba(156, 163, 175, 0.4)'},
+    hospital: { name: "Hospital", emoji: '🏥', x: canvas.width - 200, y: 50, width: 150, height: 100, color: 'rgba(239, 68, 68, 0.4)'},
+    bank: { name: "Bank", img: 'bank', x: 50, y: canvas.height - 200, width: 200, height: 150, color: 'rgba(22, 163, 74, 0.4)'},
+    policeStation: { name: "Police Dept", img: 'policeStation', x: canvas.width/2 - 100, y: canvas.height - 150, width: 200, height: 100, color: 'rgba(59, 130, 246, 0.4)'},
+    jail: { name: "Jail", emoji: '⛓️', x: canvas.width - 400, y: canvas.height - 150, width: 150, height: 100, color: 'rgba(107, 114, 128, 0.6)'}
+};
+
+// --- NPC Configuration ---
+const npcPaths = {
+    path1: [
+        { x: zones.forest.x + 50, y: zones.forest.y + 280 },
+        { x: zones.shop.x - 50, y: zones.shop.y + 50 }
+    ],
+    path2: [
+        { x: zones.cityHall.x - 50, y: zones.cityHall.y + 50 },
+        { x: zones.bank.x + 230, y: zones.bank.y + 75 }
+    ]
+};
 
         const properties = {
             house1: { name: "Cozy Cottage", emoji: '🏠', x: 400, y: canvas.height - 200, width: 120, height: 100, color: 'rgba(139, 69, 19, 0.6)', cost: 5000 },
